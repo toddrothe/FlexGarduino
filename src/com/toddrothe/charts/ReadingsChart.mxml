@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:LineChart xmlns:mx="http://www.adobe.com/2006/mxml" seriesFilters="[]" mouseDown="test();" >
+	
+	
+	
+	<mx:Script>
+		<![CDATA[
+			import mx.graphics.Stroke;
+			
+			[Bindable] private var moistureBlueStroke:Stroke = new Stroke(0x2E89FF,2);
+			[Bindable] private var tempRedStroke:Stroke = new Stroke(0xd43e3e,2);
+			[Bindable] private var lightYellowStroke:Stroke = new Stroke(0xfffd79,2);
+			
+			private function test():void
+			{
+				trace("test");
+			}
+			
+		]]>
+	</mx:Script>
+	<mx:horizontalAxis>
+		<mx:DateTimeAxis id="timeStamp" dataUnits="seconds" labelUnits="seconds"/> 
+	</mx:horizontalAxis>
+	<mx:horizontalAxisRenderers>
+		<mx:AxisRenderer axis="{timeStamp}" showLabels="true" tickPlacement="none"/>
+	</mx:horizontalAxisRenderers>
+	<mx:verticalAxis>
+		<mx:LinearAxis id="yAxis"/>
+	</mx:verticalAxis>
+	<mx:series>
+		<mx:LineSeries id="moistureLine" yField="moisture" xField="date" form="curve" displayName="Moisture" lineStroke="{moistureBlueStroke}"/>		
+		<mx:LineSeries id="tempratureLine" yField="temprature" xField="date" form="curve" displayName="Temprature" lineStroke="{tempRedStroke}"/>		
+		<mx:LineSeries id="lightLine" yField="light" xField="date" form="curve" displayName="Light" lineStroke="{lightYellowStroke}"/>
+	</mx:series>	
+	
+</mx:LineChart>

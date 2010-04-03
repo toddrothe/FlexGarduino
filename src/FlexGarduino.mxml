@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:WindowedApplication xmlns:mx="http://www.adobe.com/2006/mxml" 
+						xmlns:arduino="net.eriksjodin.arduino.*"
+						xmlns:charts="com.toddrothe.charts.*"
+						layout="absolute" creationComplete="onCreationComplete()" 
+						width="400" height="400" >
+	
+	<mx:Script>
+		<![CDATA[
+			import com.toddrothe.model.vo.ReadingVO;
+			
+			import flash.data.SQLResult;
+			import flash.data.SQLStatement;
+			import flash.events.Event;
+			import flash.events.MouseEvent;
+			
+			import mx.collections.ArrayCollection;
+			
+			import net.eriksjodin.arduino.Arduino;
+			import net.eriksjodin.arduino.events.ArduinoEvent;
+			
+			private static const CONNECT:Number = 0; 
+			private static const CREATE_DB:Number = 1;
+			private static const MOISTURE_READINGS:String = "MouistureReadings";
+			private static const TEMPRATURE_READINGS:String = "TempratureReadings";
+			private static const LIGHT_READINGS:String = "LightReadings";
+			
+			// TR: sensors
+			private var _moistureSensor:Number = 0;
+			private var _lightSensor:Number = 1;
+			private var _tempSensor:Number = 2;
+			//			private var _photoVSensor:Number = 3;
+			
+			// TR: relays
+			private var _waterPumpRelay:Number = 52;
+			private var _ledRelaySignal:Number = 53;
+			
+			
+			private var dbConn:SQLConnection = new SQLConnection(); 
+			private var dbFile:File;
+			
+			private var timer:Timer = new Timer(3000);
+			private var lastReadingId:Number;
+			
+			[Bindable] public var readingsResultData:ArrayCollection = new ArrayCollection();
+			
+			// TR: flags to track if operations have been run before
+			private var tableVerified:Boolean = false;
+			private var getReadingsFromDBInited:Boolean = false; // TR: prevents all readings in db from being pulled every time a reading is stored;
+			
+			
+			private function onCreationComplete():void
+			{
+				arduino.addEventListener(ArduinoEvent.FIRMWARE_VERSION, onArduinoStartup);
+				status_txt.text="Waiting for Firmata firmware version (reset your board)...";
+				
+				// TR: prep db connection
+				dbFile = new File("app-storage:/GardenDuinoDatum.db");
+				
+				dbConn = new SQLConnection(); 
+				dbConn.addEventListener( SQLEvent.OPEN, createTable ); 
+				dbConn.addEventListener(SQLErrorEvent.ERROR, errorDBHandler); 
+				dbConn.openAsync(dbFile); 
+			}
+			public function onArduinoStartup( e:ArduinoEvent ):void 
+			{			
+				// TR: init input pins on board
+				arduino.setAnalogPinReporting(_moistureSensor, Arduino.ON); 
+				arduino.setAnalogPinReporting(_lightSensor, Arduino.ON); 
+				arduino.setAnalogPinReporting(_tempSensor, Arduino.ON);
+				//				arduino.setAnalogPinReporting(_photoVSensor, Arduino.ON); 
+				
+				//TR: init output pins on board
+				arduino.setPinMode(_waterPumpRelay, Arduino.OUTPUT);
+				arduino.writeDigitalPin(_waterPumpRelay, Arduino.HIGH);
+				arduino.setPinMode(_ledRelaySignal, Arduino.OUTPUT);
+				
+				// TR: test
+				addEventListener(Event.ENTER_FRAME, onEnterFrame);
+				
+				timer.addEventListener(TimerEvent.TIMER, captureData);
+				timer.start();
+			}
+			
+			private function createTable( eventObj:SQLEvent = null ):void // TR: should only run once (if at all)
+			{
+				var dbStatement:SQLStatement = new SQLStatement(); 
+				dbStatement.sqlConnection = dbConn; 
+				dbStatement.addEventListener(SQLEvent.RESULT, getReadingsFromDB); 
+				dbStatement.addEventListener(SQLErrorEvent.ERROR, errorDBHandler); 
+				dbStatement.text = "CREATE TABLE IF NOT EXISTS readings (id INTEGER PRIMARY KEY, date Number, moisture NUMBER, temprature NUMBER, light NUMBER)"; 
+				//				dbStatement.text = "DROP TABLE readings";
+				tableVerified = true;
+				dbStatement.execute();  
+			}
+			private function storeReadings( eventObj:SQLEvent = null, date:Number=undefined, moisture:Number=undefined, temprature:Number=undefined, light:Number=undefined ):void 
+			{ 
+				var dbStatement:SQLStatement = new SQLStatement(); 
+				dbStatement.sqlConnection = dbConn; 
+				if( getReadingsFromDBInited )
+				{
+					var tempObject:Object = {'date':date, 'moisture':moisture, 'temprature':temprature, 'light':light}
+					dbStatement.addEventListener( SQLEvent.RESULT, addReadingToLocalResultSet );	// TR: stuff readings into local result set once they have been pushed to db
+				}
+				else
+				{
+					dbStatement.addEventListener( SQLEvent.RESULT, getReadingsFromDB ); // TR: grab all readings from db and stuff into local result set
+				}
+				dbStatement.addEventListener(SQLErrorEvent.ERROR, errorDBHandler); 
+				dbStatement.text = "INSERT INTO readings (date, moisture, temprature, light) VALUES ("+date+", "+moisture+", "+temprature+", "+light+")"; 
+				dbStatement.execute(); 
+			} 
+			private function getReadingsFromDB( eventObj:SQLEvent = null ):void 
+			{ 
+				var dbStatement:SQLStatement = new SQLStatement(); 
+				dbStatement.sqlConnection = dbConn; 
+				dbStatement.addEventListener(SQLEvent.RESULT, readingsResultFromDB); 
+				dbStatement.addEventListener(SQLErrorEvent.ERROR, errorDBHandler); 
+				dbStatement.text = "SELECT date, moisture, temprature, light FROM readings"; 
+				dbStatement.execute(); 
+				getReadingsFromDBInited = true;
+			}
+			
+			private function readingsResultFromDB( event:SQLEvent ):void
+			{			
+				var result:Object = event.target.getResult().data			
+				for each( var item:Object in result)
+				{
+					addReadingToLocalResultSet( null, item );
+				}
+				readingsResultData.refresh();
+			}
+			private function addReadingToLocalResultSet( event:SQLEvent, item:Object = null ):void
+			{
+				if( item == null ) // TR: if item is null then construct item from values written to db, avalable through event.target.text
+				{
+					item = new Object();
+					var tempString:String = event.target.text as String;
+					var vals:Array = tempString.substring( tempString.indexOf('VALUES (') + 8, tempString.length - 2).split(', ');
+					item['id'] = lastReadingId++;
+					item['date'] = Number(vals[0]);
+					item['moisture'] = vals[1];
+					item['temprature'] = vals[2];
+					item['light'] = vals[3];
+				}
+				
+				var reading:ReadingVO = new ReadingVO();
+				var readingDate:Date = new Date( item.date )
+				reading.createReadingObj( item.id, readingDate, item.moisture, item.temprature, item.light );
+				readingsResultData.addItem( reading );
+				lastReadingId = item.id as Number;
+				
+				if( event != null ) // TR: if item values were constructed from event then refresh the arrayCollection here
+				{
+					readingsResultData.refresh();
+				}
+			}			
+			
+			public var testcnt:Number = 0;			
+			private function captureData(event:TimerEvent):void
+			{
+				
+				arduino.writeDigitalPin(_waterPumpRelay, Arduino.HIGH);
+				arduino.writeDigitalPin(_ledRelaySignal, Arduino.HIGH);
+				
+				testcnt++
+				//			status_txt.text="moisture reading : "+arduino.getAnalogData(_moistureSensor) ;
+				var now:Date = new Date(); 
+				var currentTime:Number = Math.round(now.valueOf()); //	_currentTime = Math.round(now.valueOf()/1000);
+				var moistureReading:int = arduino.getAnalogData(_moistureSensor);
+				var tempratureReading:int = arduino.getAnalogData(_tempSensor)*10;
+				var lightReading:int = arduino.getAnalogData(_lightSensor)*10;
+				status_txt.text="light reading : "+lightReading+"  -  "+testcnt;
+				
+				if( !tableVerified )
+				{
+					createTable();
+				}
+				else
+				{
+					storeReadings( null, currentTime, moistureReading, tempratureReading , lightReading );
+				}
+				
+			}
+			
+			// toggle LED between on and off every frame
+			private var frames:Number = 0;
+			private function onEnterFrame(event:Event):void {
+				frames++;
+				if(frames%2==0) {
+					arduino.writeDigitalPin(_waterPumpRelay, Arduino.LOW);
+				} else {
+					arduino.writeDigitalPin(_waterPumpRelay, Arduino.HIGH);
+				}
+			}
+			
+			private function errorDBHandler(e:Event):void
+			{
+				trace("db connection error : "+e)
+			}
+			
+			
+		]]>
+	</mx:Script>
+	
+	<arduino:Arduino id="arduino" />
+	
+	<mx:Text id="status_txt"/>
+	
+	<charts:ReadingsChart id="readingsChart" x="10" y="10" width="90%" height="90%" dataProvider="{readingsResultData}"/>
+
+</mx:WindowedApplication>
