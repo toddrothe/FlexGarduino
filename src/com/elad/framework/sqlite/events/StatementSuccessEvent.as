@@ -17,7 +17,7 @@ package com.elad.framework.sqlite.events
 		/**
 		 * Holds sql statement text to allow for event handler parsing 
 		 */			
-		public var sqlText:String;
+		public var sqlText:String; // TR: allow info to pass through to view/mediator layer
 				
 		/**
 		 * Default constructor
